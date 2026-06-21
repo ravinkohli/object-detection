@@ -19,7 +19,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import cv2
 import numpy as np
+from pycocotools.coco import COCO
+import torch
+from tqdm import tqdm
+
+from objdet.ops.boxes import convert
 
 
 def selective_search(image_bgr: np.ndarray, fast: bool = True, max_proposals: int = 2000) -> np.ndarray:
@@ -37,7 +43,16 @@ def selective_search(image_bgr: np.ndarray, fast: bool = True, max_proposals: in
         1. Create the SS segmenter, setBaseImage, switch mode, process().
         2. rects are xywh -> convert to xyxy; truncate to max_proposals.
     """
-    raise NotImplementedError("Implement selective_search")
+    ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
+    ss.setBaseImage(image_bgr)
+    if fast:
+        ss.switchToSelectiveSearchFast()
+    else:
+        ss.switchToSelectiveSearchQuality()
+    rects = ss.process()
+    boxes = torch.as_tensor(rects, dtype=torch.float32)
+    boxes_xyxy = convert(boxes, in_fmt="xywh", out_fmt="xyxy")
+    return boxes_xyxy[:max_proposals].numpy()
 
 
 def cache_proposals(
@@ -58,9 +73,25 @@ def cache_proposals(
         3. Save a mapping {image_id: [P,4] array} to ``out_path`` (np.savez / pickle /
            one .npy per image). Show a tqdm progress bar — this takes a while.
     """
-    raise NotImplementedError("Implement cache_proposals")
+    c = COCO(coco_ann_file)
+    image_ids = image_ids or c.getImgIds()
+    infos = c.loadImgs(image_ids)
+    out_path = Path(out_path)
+    if not out_path.exists():
+        out_path.mkdir(exist_ok=True)
+
+    for info in tqdm(infos):
+        out_file = Path(out_path) / f"{info['id']}.npy"
+        if out_file.exists():
+            continue
+        image = cv2.imread((Path(images_dir) / info["file_name"]).as_posix())
+        if image is None:
+            continue
+        proposals = selective_search(image, fast, max_proposals=max_proposals)
+        np.save(out_file, proposals)
+    return
 
 
 def load_proposals(cache_path: str | Path, image_id: int) -> np.ndarray:
     """Load cached proposals for one image. TODO: read from the cache format you chose."""
-    raise NotImplementedError("Implement load_proposals")
+    return np.load(Path(cache_path) / f"{image_id}.npy")

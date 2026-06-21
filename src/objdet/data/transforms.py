@@ -1,18 +1,22 @@
-"""Box-aware image transforms.
+"""Box-aware image transforms, built on torchvision.transforms.v2.
 
-Detection transforms must transform the *boxes* alongside the image (a horizontal
-flip flips the boxes too; a resize rescales them). torchvision.transforms.v2 has
-box-aware transforms (it understands tv_tensors.BoundingBoxes) — you may use those,
-or write simple ones here to see exactly what happens to the coordinates.
+The classic ``transforms.Compose`` is image-only (it can't carry boxes). The v2
+API *is* detection-aware: if the target's boxes are wrapped as
+``tv_tensors.BoundingBoxes``, every geometric transform (resize, flip, crop)
+updates the boxes in lockstep with the image, and passes through non-tensor
+fields (image_id, labels) untouched.
 
-Each transform is callable as ``image, target = t(image, target)``.
+Integration: the dataset returns a PIL image + a target dict whose "boxes" is a
+plain xyxy tensor. ``DetectionTransforms`` wraps those boxes as BoundingBoxes
+(using the original H,W as the canvas), runs the v2 pipeline, then unwraps back
+to a plain tensor so downstream code (matcher/losses) sees ordinary tensors.
 
 Per-model expectations (set in configs):
-  - YOLOv1 : square resize to 448x448.
-  - Faster R-CNN : resize shorter side ~600/800, keep aspect ratio.
-  - DETR family : resize + normalize; pad a batch to common size (mask the padding).
-All: normalize with ImageNet mean/std if using a pretrained backbone, else any
-fixed mean/std (or just /255).
+  - YOLOv1     : square resize, e.g. data.image_size: 448.
+  - Faster RCNN: keep aspect ratio, data.image_min_size / image_max_size.
+  - DETR family: resize + normalize (batch padding handled at collate/model).
+Normalization uses ImageNet mean/std (matches a pretrained backbone; harmless
+for from-scratch since it's just a fixed affine).
 """
 
 from __future__ import annotations
@@ -20,61 +24,65 @@ from __future__ import annotations
 from typing import Any
 
 import torch
+from torchvision import tv_tensors
+from torchvision.transforms import v2
 
 
-class Compose:
-    """Chain transforms. TODO: store list; call each in order on (image, target)."""
+class DetectionTransforms:
+    """Wrap boxes as BoundingBoxes, run a v2 pipeline, unwrap to plain tensors."""
 
-    def __init__(self, transforms: list) -> None:
-        self.transforms = transforms
+    def __init__(self, pipeline: v2.Compose) -> None:
+        self.pipeline = pipeline
 
-    def __call__(self, image, target):
-        # TODO: for t in self.transforms: image, target = t(image, target)
-        raise NotImplementedError("Implement Compose.__call__")
-
-
-class ToTensor:
-    """PIL image -> float tensor [3,H,W] in [0,1]. Boxes untouched. TODO."""
-
-    def __call__(self, image, target):
-        raise NotImplementedError("Implement ToTensor")
-
-
-class Resize:
-    """Resize image (and scale boxes). TODO: handle fixed-square vs shorter-side modes."""
-
-    def __init__(self, size: int | tuple[int, int], keep_aspect: bool = False) -> None:
-        self.size = size
-        self.keep_aspect = keep_aspect
-
-    def __call__(self, image, target):
-        # TODO: resize image; multiply target["boxes"] by (sx, sy); update sizes.
-        raise NotImplementedError("Implement Resize")
+    def __call__(self, image, target: dict[str, Any]):
+        target = dict(target)
+        h, w = target["orig_size"]
+        target["boxes"] = tv_tensors.BoundingBoxes(
+            target["boxes"], format=tv_tensors.BoundingBoxFormat.XYXY, canvas_size=(h, w)
+        )
+        image, target = self.pipeline(image, target)
+        target["boxes"] = target["boxes"].as_subclass(torch.Tensor)
+        return image, target
 
 
-class RandomHorizontalFlip:
-    """Flip image and mirror boxes: x1' = W - x2, x2' = W - x1. TODO."""
+def build_transforms(cfg: dict[str, Any], train: bool) -> DetectionTransforms:
+    """Assemble a v2 detection pipeline from the config's data section.
 
-    def __init__(self, p: float = 0.5) -> None:
-        self.p = p
-
-    def __call__(self, image, target):
-        raise NotImplementedError("Implement RandomHorizontalFlip")
-
-
-class Normalize:
-    """Normalize a float image tensor by mean/std. Boxes untouched. TODO."""
-
-    def __init__(self, mean: tuple[float, ...], std: tuple[float, ...]) -> None:
-        self.mean, self.std = mean, std
-
-    def __call__(self, image, target):
-        raise NotImplementedError("Implement Normalize")
-
-
-def build_transforms(cfg: dict[str, Any], train: bool):
-    """Assemble a Compose pipeline from the config's data section.
-
-    TODO: read cfg (image size, flip prob, normalize stats) and return Compose([...]).
+    Reads (all optional, with sensible defaults):
+        data.image_size            -> square resize (int or [H,W]); takes priority.
+        data.image_min_size /
+        data.image_max_size        -> keep-aspect resize (shorter side -> min, capped).
+        data.hflip_prob            -> random horizontal flip prob (train only).
+        data.normalize_mean / std  -> normalization stats.
     """
-    raise NotImplementedError("Implement build_transforms")
+    data = cfg.get("data", cfg)
+    mean = data.get("normalize_mean", [0.485, 0.456, 0.406])
+    std = data.get("normalize_std", [0.229, 0.224, 0.225])
+
+    steps: list = [v2.ToImage()]  # PIL/ndarray -> tv_tensors.Image (uint8)
+
+    if train and data.get("hflip_prob", 0.5):
+        steps.append(v2.RandomHorizontalFlip(p=data.get("hflip_prob", 0.5)))
+
+    if "image_size" in data:
+        size = data["image_size"]
+        size = (size, size) if isinstance(size, int) else tuple(size)
+        steps.append(v2.Resize(size, antialias=True))
+    else:
+        # keep aspect ratio: shorter side -> image_min_size, longer side capped at max
+        steps.append(
+            v2.Resize(
+                data.get("image_min_size", 600),
+                max_size=data.get("image_max_size", 1000),
+                antialias=True,
+            )
+        )
+
+    steps += [
+        v2.ToDtype(torch.float32, scale=True),  # uint8 [0,255] -> float [0,1]
+        v2.Normalize(mean=mean, std=std),
+        # If you later add cropping (e.g. v2.RandomIoUCrop), append
+        #   v2.SanitizeBoundingBoxes()
+        # to drop boxes that fall out of view AND their matching labels.
+    ]
+    return DetectionTransforms(v2.Compose(steps))

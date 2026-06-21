@@ -30,75 +30,97 @@ from pycocotools.coco import COCO
 
 from objdet.ops.boxes import convert
 
+
 class CocoDetectionDataset(Dataset):
+    """COCO detection dataset yielding (image, target) pairs.
+
+    Args:
+        images_dir: folder of image files (e.g. data/coco/val2017).
+        ann_file:   COCO instances_*.json.
+        image_ids:  restrict to these image ids (see data/subset.py); None = all.
+        transforms: callable (image, target) -> (image, target).
+        classes:    subset of category NAMES to keep. Labels become contiguous
+                    0..C-1 in the order given (classes[0] -> 0). None = all 80.
+        cat_id_map: reuse an existing {coco_cat_id -> contiguous} map so the val
+                    split agrees with train. Overrides ``classes`` if both given.
+    """
+
     def __init__(
         self,
         images_dir: str | Path,
         ann_file: str | Path,
-        image_ids: list[int] | None = None,   # restrict to a subset (see data/subset.py)
+        image_ids: list[int] | None = None,
         transforms: Callable | None = None,
+        classes: list[str] | None = None,
         cat_id_map: dict[int, int] | None = None,
     ) -> None:
-        """TODO:
-        1. self.coco = COCO(ann_file); store images_dir, transforms.
-        2. self.ids = image_ids or list(self.coco.imgs.keys()).
-           (Optionally drop images with zero annotations.)
-        3. Build self.cat_id_map (coco->contiguous) and self.contiguous_to_coco
-           (reuse cat_id_map if passed so train/val agree).
-        """
         self.images_dir = Path(images_dir)
         self.transforms = transforms
         self.coco = COCO(ann_file)
-        ids = image_ids or list(self.coco.imgs.keys())
-        self.ids = [i for i in ids
-            if len(self.coco.getAnnIds(imgIds=i, iscrowd=False)) > 0]
-        categories = list(self.coco.cats.keys())
-        self.cat_id_map = {c: i for i, c in enumerate(categories)}
-        self.contiguous_to_coco = {v: k for k, v in self.cat_id_map.items()}
 
+        # category mapping: coco category_id -> contiguous label 0..C-1
+        if cat_id_map is not None:
+            self.cat_id_map = dict(cat_id_map)
+        elif classes is not None:
+            name_to_id = {c["name"]: c["id"] for c in self.coco.loadCats(self.coco.getCatIds())}
+            self.cat_id_map = {name_to_id[name]: i for i, name in enumerate(classes)}
+        else:
+            self.cat_id_map = {c: i for i, c in enumerate(self.coco.cats.keys())}
+        self.contiguous_to_coco = {v: k for k, v in self.cat_id_map.items()}
+        self.cat_ids = list(self.cat_id_map.keys())  # coco ids we keep
+
+        # keep only images with >=1 non-crowd annotation in our categories
+        ids = image_ids or list(self.coco.imgs.keys())
+        self.ids = [
+            i for i in ids
+            if len(self.coco.getAnnIds(imgIds=i, catIds=self.cat_ids, iscrowd=False)) > 0
+        ]
 
     def __len__(self) -> int:
         return len(self.ids)
 
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, dict[str, Any]]:
-        """TODO:
-        1. img_id = self.ids[index]; load image file (PIL) from images_dir.
-        2. anns = self.coco.loadAnns(self.coco.getAnnIds(imgIds=img_id, iscrowd=False)).
-        3. boxes = [ann['bbox'] for ann in anns]  # COCO bbox is xywh -> convert to xyxy.
-           labels = [self.cat_id_map[ann['category_id']] for ann in anns].
-           Skip degenerate boxes (w<=0 or h<=0).
-        4. Build target dict (boxes, labels, image_id, orig_size).
-        5. If self.transforms: image, target = self.transforms(image, target).
-        6. Return (image_tensor, target).
-        """
+    def __getitem__(self, index: int) -> tuple[Any, dict[str, Any]]:
         img_id = self.ids[index]
-        image = Image.open((self.images_dir / self.coco.loadImgs(img_id)[0]["file_name"])).convert("RGB")
-        anns = self.coco.loadAnns(self.coco.getAnnIds(imgIds=img_id, iscrowd=False))
-        boxes = [ann["bbox"] for ann in anns]
-        boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
+        info = self.coco.loadImgs(img_id)[0]
+        image = Image.open(self.images_dir / info["file_name"]).convert("RGB")
+
+        # only annotations of our subset categories (drops other classes + crowd)
+        anns = self.coco.loadAnns(
+            self.coco.getAnnIds(imgIds=img_id, catIds=self.cat_ids, iscrowd=False)
+        )
+        xywh = torch.as_tensor([a["bbox"] for a in anns], dtype=torch.float32).reshape(-1, 4)
         labels = torch.as_tensor(
             [self.cat_id_map[a["category_id"]] for a in anns], dtype=torch.long
         )
-        boxes = convert(boxes, in_fmt="xywh", out_fmt="xyxy")
+        boxes = convert(xywh, in_fmt="xywh", out_fmt="xyxy")
 
+        # drop degenerate boxes (zero / negative area)
         keep = (boxes[:, 2] > boxes[:, 0]) & (boxes[:, 3] > boxes[:, 1])
-        boxes = boxes[keep]
-        labels = labels[keep]
-        out_dict = {
+        boxes, labels = boxes[keep], labels[keep]
+
+        target = {
             "boxes": boxes,
             "labels": labels,
             "image_id": img_id,
-            "orig_size": image.size
+            "orig_size": (info["height"], info["width"]),
         }
-        return self.transforms(image, out_dict) if self.transforms else (image, out_dict)
+        return self.transforms(image, target) if self.transforms else (image, target)
+
 
 def collate_fn(batch):
-    """Detection batches have variable #boxes per image -> can't default-stack targets.
+    """Collate (image, target) samples into a batch.
 
-    TODO:
-        - return (list_of_images, list_of_targets), or stack images to [B,3,H,W] only
-          if your transforms pad/resize them all to the same size (DETR pads; YOLO
-          uses fixed 448x448; Faster R-CNN typically keeps a list).
+    Detection samples have a variable number of boxes per image, so the default
+    collate (which stacks every field) fails on the target dict. We keep images
+    and targets as parallel lists; this works for every detector here:
+      - Faster R-CNN consumes a list of variable-size images directly.
+      - YOLOv1 / DETR use fixed-size or padded images, so the model (or its own
+        collate) can ``torch.stack(images)`` once it knows they share a shape.
+
+    Args:
+        batch: list of (image, target_dict).
+    Returns:
+        (images, targets): a list of B images and a list of B target dicts.
     """
     images, targets = zip(*batch)
     return list(images), list(targets)
