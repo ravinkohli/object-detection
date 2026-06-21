@@ -1,0 +1,50 @@
+# YOLOv1 config (single-stage grid detector).
+# Fixed 448x448 input, S=7 grid, B=2 boxes/cell. Custom DarkNet-style backbone.
+
+model:
+  name: yolov1
+  backbone: yolo            # the hand-built 24-conv stack (models/backbone.py)
+  pretrained_backbone: false
+  num_classes: 5
+  S: 7                      # grid size
+  B: 2                      # boxes per cell
+  lambda_coord: 5.0
+  lambda_noobj: 0.5
+
+data:
+  root: data/coco
+  images_dir: data/coco/val2017
+  ann_file: data/coco/annotations/instances_val2017.json
+  classes: [person, car, dog, cat, chair]
+  max_images: 800
+  val_fraction: 0.2
+  image_size: 448           # square resize (YOLOv1 expects square input)
+  normalize_mean: [0.0, 0.0, 0.0]   # YOLOv1 trained on raw-ish inputs; /255 then this
+  normalize_std: [1.0, 1.0, 1.0]
+  hflip_prob: 0.5
+  num_workers: 4
+
+optim:
+  epochs: 50                # single-stage from scratch needs more epochs
+  batch_size: 16
+  lr: 0.001
+  momentum: 0.9
+  weight_decay: 0.0005
+  lr_steps: [30, 40]
+  lr_gamma: 0.1
+  grad_clip: 0.0            # 0 = off
+
+eval:
+  score_thresh: 0.25
+  nms_thresh: 0.5
+  max_detections: 100
+  eval_every: 5
+
+mlflow:
+  experiment: yolov1
+  run_name: yolov1-subset
+  tracking_uri: null
+
+device: mps
+seed: 0
+output_dir: runs/yolov1

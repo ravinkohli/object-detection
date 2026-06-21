@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- objdet project ---
+data/            # COCO downloads, Selective Search proposal caches
+runs/            # checkpoints / per-experiment outputs
+mlruns/          # MLflow local tracking store
+*.pt             # model checkpoints
+*.pth

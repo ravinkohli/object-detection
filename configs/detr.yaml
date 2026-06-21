@@ -1,0 +1,62 @@
+# DETR config (transformer encoder-decoder, set prediction, no anchors/NMS).
+
+model:
+  name: detr
+  backbone: resnet50        # returns C5 only for plain DETR
+  pretrained_backbone: true # DETR is very slow to train; warm backbone strongly advised
+  num_classes: 5
+  num_queries: 100          # fixed set size (>= max objects/image)
+  d_model: 256
+  nhead: 8
+  num_encoder_layers: 6
+  num_decoder_layers: 6
+  dim_feedforward: 2048
+  dropout: 0.1
+
+loss:                       # set_criterion weights
+  cost_class: 1.0           # Hungarian matcher costs
+  cost_bbox: 5.0
+  cost_giou: 2.0
+  weight_ce: 1.0            # loss weights
+  weight_bbox: 5.0
+  weight_giou: 2.0
+  eos_coef: 0.1             # down-weight "no object" class
+  aux_loss: true            # loss at every decoder layer
+
+data:
+  root: data/coco
+  images_dir: data/coco/val2017
+  ann_file: data/coco/annotations/instances_val2017.json
+  classes: [person, car, dog, cat, chair]
+  max_images: 800
+  val_fraction: 0.2
+  image_min_size: 480
+  image_max_size: 800
+  normalize_mean: [0.485, 0.456, 0.406]
+  normalize_std: [0.229, 0.224, 0.225]
+  hflip_prob: 0.5
+  num_workers: 4
+
+optim:
+  epochs: 150               # DETR needs long schedules (paper: 300+); subset shorter
+  batch_size: 4
+  lr: 0.0001               # transformer lr
+  lr_backbone: 0.00001     # lower lr for the backbone
+  weight_decay: 0.0001
+  lr_steps: [100]
+  lr_gamma: 0.1
+  grad_clip: 0.1           # DETR clips grad norm to 0.1
+
+eval:
+  score_thresh: 0.5        # DETR thresholds on the softmax score; no NMS
+  max_detections: 100
+  eval_every: 10
+
+mlflow:
+  experiment: detr
+  run_name: detr-subset
+  tracking_uri: null
+
+device: mps
+seed: 0
+output_dir: runs/detr

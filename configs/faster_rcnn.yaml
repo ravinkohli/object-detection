@@ -1,0 +1,69 @@
+# Faster R-CNN config (two-stage: backbone + RPN + ROI head).
+# These configs are the single source of truth for an experiment. Your code
+# (utils/config.py + the model/data builders) decides which keys it reads — treat
+# the keys below as the suggested schema, adjust freely as you implement.
+
+model:
+  name: faster_rcnn
+  backbone: vgg16          # see models/backbone.py:build_backbone
+  pretrained_backbone: false   # true = ImageNet init (much faster convergence)
+  num_classes: 5           # contiguous classes (must match data.classes length)
+
+  rpn:
+    anchor_scales: [128, 256, 512]
+    anchor_ratios: [0.5, 1.0, 2.0]
+    feature_stride: 16     # VGG16 conv5 stride
+    pre_nms_top_n: 2000
+    post_nms_top_n: 1000
+    nms_thresh: 0.7
+    fg_iou_thresh: 0.7     # >= -> positive anchor
+    bg_iou_thresh: 0.3     # <  -> negative anchor
+    batch_size: 256        # sampled anchors / image
+    positive_fraction: 0.5
+
+  roi_head:
+    output_size: 7         # ROI-align output HxW
+    fg_iou_thresh: 0.5
+    bg_iou_thresh: 0.5
+    batch_size: 128        # sampled proposals / image
+    positive_fraction: 0.25
+    box_reg_weights: [10.0, 10.0, 5.0, 5.0]
+
+data:
+  root: data/coco                       # where download_coco.py puts things
+  images_dir: data/coco/val2017         # default subset is carved from val2017
+  ann_file: data/coco/annotations/instances_val2017.json
+  classes: [person, car, dog, cat, chair]   # the 5 subset classes
+  max_images: 800
+  val_fraction: 0.2
+  image_min_size: 600    # resize shorter side, keep aspect ratio
+  image_max_size: 1000
+  normalize_mean: [0.485, 0.456, 0.406]
+  normalize_std: [0.229, 0.224, 0.225]
+  hflip_prob: 0.5
+  num_workers: 4
+
+optim:
+  epochs: 20
+  batch_size: 2          # images/step (Faster R-CNN keeps a list, small batch)
+  lr: 0.005
+  momentum: 0.9
+  weight_decay: 0.0005
+  lr_steps: [12, 16]     # epochs at which to drop LR
+  lr_gamma: 0.1
+  grad_clip: 10.0
+
+eval:
+  score_thresh: 0.05
+  nms_thresh: 0.5
+  max_detections: 100
+  eval_every: 2          # epochs
+
+mlflow:
+  experiment: faster_rcnn
+  run_name: faster_rcnn-subset
+  tracking_uri: null     # null -> local ./mlruns
+
+device: mps
+seed: 0
+output_dir: runs/faster_rcnn

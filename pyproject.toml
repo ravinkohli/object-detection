@@ -1,0 +1,41 @@
+[project]
+name = "objdet"
+version = "0.1.0"
+description = "Object detection from scratch: Fast/Faster R-CNN, YOLOv1, DETR, DINO, RT-DETR (learning project)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # --- core DL ---
+    "torch>=2.3",
+    "torchvision>=0.18",
+    # --- data / COCO ---
+    "pycocotools>=2.0.7",
+    "pillow>=10.0",
+    "numpy>=1.26",
+    # Selective Search lives in cv2.ximgproc, which ships only in the *contrib* build.
+    "opencv-contrib-python>=4.9",
+    # --- DETR-family Hungarian matching ---
+    "scipy>=1.11",
+    # --- experiment tracking ---
+    "mlflow>=2.12",
+    # --- config / utils / viz ---
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+    "matplotlib>=3.8",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/objdet"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
