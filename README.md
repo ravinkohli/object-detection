@@ -75,17 +75,26 @@ Work **bottom-up** — each step is exercised by the next. Run `uv run pytest` a
 
 1. **`ops/boxes.py`** → `ops/anchors.py` → `ops/matcher.py` — the foundation. Add tests
    in `tests/test_boxes.py` (un-skip them).
+   - *Done so far:* `ops/boxes.py` (encode/decode + wrappers) and
+     `ops/anchors.py:generate_anchors_single_level` are implemented and tested.
 2. **`data/`** — `coco.py`, `subset.py`, `transforms.py` + `scripts/download_coco.py`.
 3. **`models/backbone.py`**, then **Fast R-CNN** (`models/fast_rcnn.py`,
    `losses/detection_loss.py`, `data/proposals.py` + `scripts/precompute_proposals.py`).
 4. **`models/rpn.py`** → **Faster R-CNN** (`models/faster_rcnn.py` — reuses the ROI head).
-5. **YOLOv1** (`models/backbone.py:YOLOBackbone`, `models/yolov1.py`, `losses/yolo_loss.py`).
-6. **DETR** (`models/transformer.py` → `models/detr.py`, `ops/hungarian_matcher.py`,
+5. **FPN (optional neck for Faster R-CNN)** — toggle `model.fpn.enabled` in
+   `configs/faster_rcnn.yaml`. Build in this sub-order:
+   a. `models/backbone.py:ResNetBackbone` returning `{c2,c3,c4,c5}` (multi-level).
+   b. `models/fpn.py:FPN.forward` (top-down + lateral); test pyramid shapes with dummy tensors.
+   c. `ops/anchors.py:generate_anchors_multi_level` (loop the single-level fn per level).
+   d. multi-level `RPN` (weight-shared head across P2–P6) + level-aware ROI pooling
+      (`torchvision.ops.MultiScaleRoIAlign`). A/B against the single-level vgg16 version.
+6. **YOLOv1** (`models/backbone.py:YOLOBackbone`, `models/yolov1.py`, `losses/yolo_loss.py`).
+7. **DETR** (`models/transformer.py` → `models/detr.py`, `ops/hungarian_matcher.py`,
    `losses/set_criterion.py`) — the cleanest transformer detector; do it first of the three.
-7. **DINO** (`ops/deformable_attn.py` → `models/dino.py`; start as Deformable DETR, then
+8. **DINO** (`ops/deformable_attn.py` → `models/dino.py`; start as Deformable DETR, then
    add query selection, then contrastive denoising).
-8. **RT-DETR** (`models/rtdetr.py` — reuse DINO's deformable decoder; add AIFI + CCFM).
-9. **`engine/`** (`trainer.py`, `evaluator.py`, `inference.py`) + `scripts/{train,eval,predict}.py`.
+9. **RT-DETR** (`models/rtdetr.py` — reuse DINO's deformable decoder; add AIFI + CCFM).
+10. **`engine/`** (`trainer.py`, `evaluator.py`, `inference.py`) + `scripts/{train,eval,predict}.py`.
 
 ## Running things (once implemented)
 
@@ -102,7 +111,7 @@ configs/            one YAML per detector (filled templates; the experiment's so
 src/objdet/
   data/             COCO dataset, subset builder, transforms, Selective Search proposals
   ops/              box math, anchors, matcher, Hungarian matcher, deformable attention
-  models/           backbones + the 6 detectors + shared transformer blocks
+  models/           backbones + FPN neck + the 6 detectors + shared transformer blocks
   losses/           R-CNN multitask loss, YOLO loss, DETR-family set criterion
   engine/           trainer, COCO evaluator, inference/post-processing
   utils/            config, device, mlflow, viz

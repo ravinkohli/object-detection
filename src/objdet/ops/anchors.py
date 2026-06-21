@@ -75,7 +75,25 @@ def generate_anchors_multi_level(
 ) -> list[torch.Tensor]:
     """Anchors for an FPN-style multi-level backbone (one anchor set per level).
 
-    Not needed for the plain VGG Faster R-CNN (single level) — implement when/if
-    you add FPN. TODO: loop generate_anchors_single_level per level.
+    With FPN, each pyramid level handles a different object size, so you use ONE
+    scale per level (not 3 scales on one map) and the same aspect ratios everywhere.
+
+    Args:
+        feature_sizes: [(H_l, W_l)] per level, e.g. for P2..P6.
+        strides: input pixels per cell per level, e.g. [4, 8, 16, 32, 64].
+        scales_per_level: one tuple of scales per level, typically a single value each,
+                          e.g. [(32,), (64,), (128,), (256,), (512,)].
+        aspect_ratios: shared across levels, e.g. (0.5, 1.0, 2.0).
+
+    Returns:
+        list of per-level anchor tensors [[H_l*W_l*A, 4], ...], A = scales_l * ratios.
+        (Return a LIST, not concatenated, so each level's anchors stay aligned with
+        that level's RPN head outputs. Concatenate later if/when you need a flat set.)
+
+    TODO:
+        1. assert len(feature_sizes) == len(strides) == len(scales_per_level).
+        2. For each level l: call generate_anchors_single_level(feature_sizes[l],
+           strides[l], scales_per_level[l], aspect_ratios, device).
+        3. Return the list (one tensor per level).
     """
-    raise NotImplementedError("Implement generate_anchors_multi_level (optional, FPN)")
+    raise NotImplementedError("Implement generate_anchors_multi_level (FPN)")

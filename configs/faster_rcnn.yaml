@@ -5,14 +5,31 @@
 
 model:
   name: faster_rcnn
-  backbone: vgg16          # see models/backbone.py:build_backbone
+  # Single-level (classic) uses vgg16. FPN needs a multi-level backbone -> resnet50.
+  backbone: vgg16          # vgg16 (single-level) | resnet50 (use with fpn.enabled)
   pretrained_backbone: false   # true = ImageNet init (much faster convergence)
   num_classes: 5           # contiguous classes (must match data.classes length)
 
+  # --- Feature Pyramid Network (optional neck; see models/fpn.py) ---
+  # enabled: false -> classic single-level Faster R-CNN (vgg16 conv5, stride 16).
+  # enabled: true  -> resnet50 C2..C5 -> FPN P2..P6; the RPN/anchors go multi-level
+  #                   and the ROI head uses MultiScaleRoIAlign.
+  fpn:
+    enabled: false
+    backbone: resnet50           # which backbone to draw C2..C5 from when enabled
+    return_layers: [layer1, layer2, layer3, layer4]   # -> C2, C3, C4, C5
+    out_channels: 256            # unified pyramid channel count
+    add_p6: true                 # extra coarsest level for the RPN (large objects)
+    strides: [4, 8, 16, 32, 64]  # P2..P6 input strides (must match the levels used)
+
   rpn:
+    # SINGLE-LEVEL (fpn.enabled: false): 3 scales on one map at one stride.
     anchor_scales: [128, 256, 512]
-    anchor_ratios: [0.5, 1.0, 2.0]
     feature_stride: 16     # VGG16 conv5 stride
+    # MULTI-LEVEL (fpn.enabled: true): ONE scale per pyramid level, shared ratios.
+    # Used instead of anchor_scales/feature_stride above when fpn.enabled.
+    anchor_scales_per_level: [[32], [64], [128], [256], [512]]   # P2..P6
+    anchor_ratios: [0.5, 1.0, 2.0]   # shared across levels
     pre_nms_top_n: 2000
     post_nms_top_n: 1000
     nms_thresh: 0.7
@@ -23,6 +40,10 @@ model:
 
   roi_head:
     output_size: 7         # ROI-align output HxW
+    # With FPN: MultiScaleRoIAlign routes each proposal to a level by its size.
+    # canonical_scale/level are the k0/224 params of FPN eq.1 (k = k0 + log2(sqrt(wh)/224)).
+    canonical_scale: 224
+    canonical_level: 4
     fg_iou_thresh: 0.5
     bg_iou_thresh: 0.5
     batch_size: 128        # sampled proposals / image
