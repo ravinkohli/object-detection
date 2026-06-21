@@ -223,3 +223,4 @@ runs/            # checkpoints / per-experiment outputs
 mlruns/          # MLflow local tracking store
 *.pt             # model checkpoints
 *.pth
+data/coco/

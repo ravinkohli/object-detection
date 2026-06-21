@@ -23,9 +23,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
+from PIL import Image
 import torch
 from torch.utils.data import Dataset
+from pycocotools.coco import COCO
 
+from objdet.ops.boxes import convert
 
 class CocoDetectionDataset(Dataset):
     def __init__(
@@ -43,10 +46,19 @@ class CocoDetectionDataset(Dataset):
         3. Build self.cat_id_map (coco->contiguous) and self.contiguous_to_coco
            (reuse cat_id_map if passed so train/val agree).
         """
-        raise NotImplementedError("Implement CocoDetectionDataset.__init__")
+        self.images_dir = Path(images_dir)
+        self.transforms = transforms
+        self.coco = COCO(ann_file)
+        ids = image_ids or list(self.coco.imgs.keys())
+        self.ids = [i for i in ids
+            if len(self.coco.getAnnIds(imgIds=i, iscrowd=False)) > 0]
+        categories = list(self.coco.cats.keys())
+        self.cat_id_map = {c: i for i, c in enumerate(categories)}
+        self.contiguous_to_coco = {v: k for k, v in self.cat_id_map.items()}
+
 
     def __len__(self) -> int:
-        raise NotImplementedError
+        return len(self.ids)
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, dict[str, Any]]:
         """TODO:
@@ -59,8 +71,26 @@ class CocoDetectionDataset(Dataset):
         5. If self.transforms: image, target = self.transforms(image, target).
         6. Return (image_tensor, target).
         """
-        raise NotImplementedError("Implement CocoDetectionDataset.__getitem__")
+        img_id = self.ids[index]
+        image = Image.open((self.images_dir / self.coco.loadImgs(img_id)[0]["file_name"])).convert("RGB")
+        anns = self.coco.loadAnns(self.coco.getAnnIds(imgIds=img_id, iscrowd=False))
+        boxes = [ann["bbox"] for ann in anns]
+        boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
+        labels = torch.as_tensor(
+            [self.cat_id_map[a["category_id"]] for a in anns], dtype=torch.long
+        )
+        boxes = convert(boxes, in_fmt="xywh", out_fmt="xyxy")
 
+        keep = (boxes[:, 2] > boxes[:, 0]) & (boxes[:, 3] > boxes[:, 1])
+        boxes = boxes[keep]
+        labels = labels[keep]
+        out_dict = {
+            "boxes": boxes,
+            "labels": labels,
+            "image_id": img_id,
+            "orig_size": image.size
+        }
+        return self.transforms(image, out_dict) if self.transforms else (image, out_dict)
 
 def collate_fn(batch):
     """Detection batches have variable #boxes per image -> can't default-stack targets.
@@ -70,4 +100,5 @@ def collate_fn(batch):
           if your transforms pad/resize them all to the same size (DETR pads; YOLO
           uses fixed 448x448; Faster R-CNN typically keeps a list).
     """
-    raise NotImplementedError("Implement collate_fn")
+    images, targets = zip(*batch)
+    return list(images), list(targets)
