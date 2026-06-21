@@ -45,7 +45,18 @@ def match(
         3. If allow_low_quality: for each GT find the anchor(s) with max IoU to it
            and force those to positive (assign that GT). (Be careful with ties.)
     """
-    raise NotImplementedError("Implement match")
+    if iou.shape[0] == 0:
+        return torch.full((iou.shape[1],), -1, dtype=torch.long, device=iou.device)
+    best_gt_iou, best_gt_idx = iou.max(dim=0)
+    matches = best_gt_idx.clone()
+    matches[best_gt_iou < low_thresh] = -1
+    between = (best_gt_iou >= low_thresh) & (best_gt_iou < high_thresh)
+    matches[between] = -2
+    if allow_low_quality:
+        highest_per_gt, _ = iou.max(dim=1)
+        gt_idx, anchor_idx = torch.where((iou == highest_per_gt[:, None]) & (highest_per_gt[:, None] > 0)) # ignore when iou==0
+        matches[anchor_idx] = gt_idx
+    return matches
 
 
 def sample_minibatch(
@@ -56,8 +67,7 @@ def sample_minibatch(
     """Subsample positives/negatives to a fixed minibatch.
 
     Args:
-        labels: [N] with 1 = positive, 0 = negative, -1 = ignore (or adapt to your
-                ``match`` encoding).
+        labels: [N] with >= 0 for positive, -1 for background and -2 for ignore
         batch_size: total samples to keep (e.g. 256 RPN, 128 head).
         positive_fraction: target fraction of positives (e.g. 0.5 RPN, 0.25 head).
 
@@ -70,4 +80,11 @@ def sample_minibatch(
         2. num_neg = batch_size - num_pos (capped at #negatives).
         3. Randomly permute and slice the positive/negative index pools.
     """
-    raise NotImplementedError("Implement sample_minibatch")
+    positives = torch.where(labels >= 0)[0]
+    negatives = torch.where(labels==-1)[0]
+    num_pos = min(positives.shape[0], round(batch_size * positive_fraction))
+    num_neg = min(negatives.shape[0], batch_size - num_pos)
+    perm_pos = torch.randperm(positives.numel(), device=labels.device)
+    perm_neg = torch.randperm(negatives.numel(), device=labels.device)
+    return (positives[perm_pos[:num_pos]], negatives[perm_neg[:num_neg]])
+
