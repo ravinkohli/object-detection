@@ -11,6 +11,8 @@ Worked example (single feature map, stride 16):
 """
 
 from __future__ import annotations
+import itertools
+from math import sqrt
 
 import torch
 
@@ -44,7 +46,24 @@ def generate_anchors_single_level(
         4. Return on ``device``. Keep the ordering consistent with how the RPN head
            reshapes its predictions (cells-major, then anchors) — document your choice.
     """
-    raise NotImplementedError("Implement generate_anchors_single_level")
+    coords = []
+    for scale, aspect_ratio in itertools.product(scales, aspect_ratios):
+        w = scale * sqrt(aspect_ratio)
+        h = scale / sqrt(aspect_ratio)
+        coords.append([-w/2, -h/2, w/2, h/2])
+    base = torch.as_tensor(coords, dtype=torch.float32, device=device)
+    x_centers = torch.arange(feature_size[1], dtype=torch.float32, device=device)
+    y_centers = torch.arange(feature_size[0], dtype=torch.float32, device=device)
+    x_centers = x_centers * stride + stride/2
+    y_centers = y_centers * stride + stride/2
+    grid_y, grid_x = torch.meshgrid(y_centers, x_centers, indexing="ij")
+    ys = grid_y.reshape(-1)
+    xs = grid_x.reshape(-1)
+    centers = torch.stack([xs, ys, xs, ys], dim=1)
+    centers = centers.unsqueeze(1)
+    anchors = centers + base[None]
+    anchors = anchors.reshape(-1, 4)
+    return anchors
 
 
 def generate_anchors_multi_level(
