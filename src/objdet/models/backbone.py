@@ -17,23 +17,30 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torchvision
 
 
 class VGG16Backbone(nn.Module):
     """VGG16 feature extractor for R-CNN (output stride 16, 512 channels)."""
 
-    def __init__(self, pretrained: bool = False) -> None:
+    def __init__(self, pretrained: bool = False, freeze_first = 2) -> None:
         super().__init__()
         # TODO:
         #   - m = torchvision.models.vgg16(weights="IMAGENET1K_V1" if pretrained else None)
         #   - take m.features but DROP the final maxpool so stride stays 16 (conv5_3).
         #   - (classic trick) freeze conv1/conv2 to save memory; optional.
         #   - self.out_channels = 512.
-        raise NotImplementedError("Implement VGG16Backbone.__init__")
+        model = torchvision.models.vgg16(weights="IMAGENET1K_V1" if pretrained else None)
+        self.features = model.features[:-1] # drop maxpool
+        self.out_channels = self.features[-2].out_channels
+        # freeze first 2 convolutions
+        if pretrained:
+            for p in self.features[:10].parameters():
+                p.requires_grad = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """[B,3,H,W] -> [B,512,H/16,W/16]. TODO: return self.features(x)."""
-        raise NotImplementedError("Implement VGG16Backbone.forward")
+        return self.features(x)
 
 
 class ResNetBackbone(nn.Module):
