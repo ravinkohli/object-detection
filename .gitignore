@@ -224,3 +224,4 @@ mlruns/          # MLflow local tracking store
 *.pt             # model checkpoints
 *.pth
 data/coco/
+.claude/settings.local.json
